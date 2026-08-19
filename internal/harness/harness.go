@@ -1,12 +1,12 @@
 package harness
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -127,7 +127,7 @@ func (h *Harness) Start() error {
 	cmd.Stderr = logFile
 	cmd.Env = append(os.Environ(), "DSH_HOME="+h.dshHome)
 	// 独立进程组, 便于退出时兜底回收整棵进程树。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		h.fail(fmt.Errorf("启动 harness 子进程失败: %w", err))
@@ -153,7 +153,7 @@ func (h *Harness) Start() error {
 		pgid := h.processGroup
 		h.mu.Unlock()
 		if pgid != 0 {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			_ = killProcessTree(pgid)
 			<-done
 		}
 		h.mu.Lock()
@@ -208,8 +208,8 @@ func (h *Harness) Stop() error {
 	done := h.done
 	pgid := h.processGroup
 	h.mu.Unlock()
-	// 向整个进程组发 SIGTERM 优雅关闭。
-	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+	// 向整个进程组发终止信号, 请求优雅关闭。
+	if err := terminateProcessTree(pgid); err != nil && !errors.Is(err, ErrProcessGone) {
 		h.mu.Lock()
 		h.processGroup = 0
 		h.cmd = nil
@@ -224,7 +224,7 @@ func (h *Harness) Stop() error {
 		// 正常退出
 	case <-time.After(ShutdownGrace):
 		// 强杀整个进程组兜底。
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = killProcessTree(pgid)
 		<-done
 	}
 

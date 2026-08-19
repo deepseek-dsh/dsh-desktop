@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -141,7 +140,7 @@ func installPlugin(workDir, name, source string) error {
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	// 独立进程组, 便于超时后回收整棵安装进程树。
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动插件 %s 安装失败: %w", name, err)
@@ -158,7 +157,7 @@ func installPlugin(workDir, name, source string) error {
 		return nil
 	case <-time.After(MarketInstallTimeout):
 		// 超时清理进程组, 避免残留安装进程。
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = killProcessTree(cmd.Process.Pid)
 		<-done
 		return fmt.Errorf("插件 %s 安装超时(%v)", name, MarketInstallTimeout)
 	}
