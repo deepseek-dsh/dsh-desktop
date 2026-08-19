@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DSH Desktop
+Comment=DeepSeek Harness Desktop
+Exec=/usr/local/bin/dsh-desktop
+Icon=/usr/local/share/icons/dsh-desktop.png
+Terminal=false
+Categories=Utility;Development;
+StartupWMClass=dsh-desktop
