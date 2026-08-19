@@ -1,139 +1,156 @@
 # DeepSeek Harness Desktop (dsh-desktop)
 
-将 [DeepSeek Harness](https://github.com/dataelement/dsh-desktop) 的 `dsh web` 服务封装为 PC 端桌面应用。本应用不重新实现 Harness,而是补齐桌面产品所需的「宿主」能力:自动拉起子进程、固定回环端口、就绪检测、进程树回收、日志落地,以及状态展示界面。
+**English** | [中文](./docs/zh/README.md)
 
-技术栈:**Wails v2 (Go)** + **Vue 3**。后端负责进程托管与本地能力,应用启动后直接进入 Harness 主页(无启动过渡页),就绪后壳体通过短暂状态轮询 **将窗口直接跳转到 Harness Web UI**,由窗口原生承载、无 iframe 嵌套,渲染流畅。
+**Turn DeepSeek Harness into a desktop app — double-click to run, no terminal, no commands to remember.**
 
-> 本实现参照 [dataelement/dsh-desktop](https://github.com/dataelement/dsh-desktop)(Electron 壳)的产品职责,以 Wails 形态落地。
+[![Go 1.25+](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Wails v2](https://img.shields.io/badge/Wails-v2-2F6BFF)](https://wails.io/) [![Vue 3](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](https://vuejs.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](#license)
 
-## 现状与运行策略
+---
 
-- **第一阶段(已实现)**:优先复用 PATH 中的系统 `dsh`;未安装时使用系统 Node.js + `npx` 拉起兼容版本。
-- **第二阶段(规划)**:内置精简 Node 运行时与 dsh 依赖,实现完全离线开箱即用。
+DeepSeek Harness (DSH) is a powerful AI agent workbench, but its web service is CLI-driven: `dsh web --port xxx`, then open a browser tab. That's a high barrier for everyday users.
 
-## 功能
+**dsh-desktop hides all of that.** It doesn't reimplement Harness — it's a proper host: double-click to launch, auto-manage the port, guard the process, and turn the window itself into the Harness UI. You see a normal desktop app; behind it runs the full DeepSeek Harness.
 
-- 双击即用,自动拉起 Harness,无需手动启动 CLI 或管理端口。
-- 固定 `127.0.0.1:3080` 回环端口;启动时探测该端口,已有 Harness 服务则直接复用,否则自动拉起新服务。
-- 应用专属数据目录(与安装目录分离,升级不删用户数据),遵循 XDG 规范。
-- 子进程托管:启动、就绪轮询(400ms,超时 180s)、日志、重启、优雅关闭,并以独立进程组在退出/超时后强杀兜底回收整棵进程树,杜绝僵尸进程。
-- 复用探测:端口上已有 Harness 服务时直接复用,不重复拉起。
-- **直达主页**:应用启动后显示透明底 favicon 图标(呼吸动画),就绪后通过低频状态检查直接跳转承载 Harness 主页;插件市场在后台静默安装,不阻塞进入。
-- **默认预装插件**:自动安装插件市场 `dshmarket`(已装则跳过,幂等);开发时可通过 `DSH_DESKTOP_USAGE_PLUGIN` 接入本地用量插件。其它插件需要时在 Harness 的「插件市场」里安装。安装为尽力而为:失败仅记录、不阻断整体;可用环境变量 `DSH_DESKTOP_SKIP_PLUGINS=1` 关闭全部自动预装。插件安装沿用 Harness profile 已选择的 pnpm store，避免 store 不一致。插件无法热加载时由市场提示“立即重启”，重启动作交给桌面端托管，完成后自动刷新页面。
+## Why dsh-desktop?
 
-## 架构
+| Scenario | Bare `dsh` CLI | dsh-desktop |
+|---|---|---|
+| Startup | Type `dsh web`, remember the port | Double-click, auto-launch |
+| Port | Random & collides, dies with the terminal | Fixed `127.0.0.1:3080`, reuses an existing service |
+| Process | Orphans on terminal close | Full lifecycle management, process-tree reaping on exit |
+| Plugins | Manual commands | Market auto-installed in background, native restart prompt |
+| UI | A browser tab among others | Native window, no iframe |
+
+## Key Features
+
+- **Double-click to run** — no CLI, no port management; open straight into the Harness home page.
+- **Fixed port + reuse probe** — listens on `127.0.0.1:3080`; if a Harness service is already running there, it is reused instead of being started twice.
+- **Process hosting** — start, readiness detection, logging, restart, graceful shutdown; runs in its own process group with a kill fallback, so no zombies.
+- **Straight to the home page** — a breathing-logo splash, then the window navigates directly to the Harness Web UI.
+- **Auto preinstalled plugins** — `dshmarket` installs silently after entering the home page (idempotent); plugins needing a restart trigger a native prompt with one-click restart + refresh.
+- **Shared data with system DSH** — the same profiles / sessions / plugins / credentials as the CLI `dsh`.
+- **Clean exit** — graceful shutdown of the child process and full process-tree reaping on window close.
+
+## Run Strategy: Now & Next
+
+- **Stage 1 (shipped)** — prefer the system `dsh` on PATH; fall back to Node.js + `npx` when missing. Works on a clean machine.
+- **Stage 2 (planned)** — bundle a minimal Node runtime and dsh dependencies for fully offline, out-of-the-box use.
+
+## How It Works
+
+```
+Launch app
+   │
+   ▼
+Probe 127.0.0.1:3080 ── Harness already running? ── yes ──► reuse, go to home page
+   │                                                       (no duplicate spawn)
+   no
+   ▼
+Spawn `dsh web` (system dsh first, npx as fallback)
+   │
+   ▼
+Readiness polling (every 400ms, 180s timeout)
+   │
+   ▼
+Window navigates to the Harness Web UI; splash exits
+   │
+   ▼
+Window close ──► graceful shutdown, kill-group fallback
+```
+
+Two background pipelines also run: **plugin preinstall** (silently installs the market after entering the home page) and **plugin-change monitoring** (native restart prompt when a plugin needs one).
+
+## Architecture
 
 ```text
-dsh-desktop (Wails, Go)
-├── main.go                   # 入口: 加载配置, 绑定 App
-├── internal/cfg/             # 端口/数据目录/日志路径解析与目录创建
-├── internal/harness/         # dsh web 子进程生命周期(启动/就绪/回收/关闭)
-├── internal/app/             # Wails 绑定 API(供前端调用)
-├── cmd/smoke/                # 开发期冒烟验证(真实拉起 dsh, 非产品入口)
-├── frontend/                 # Vue 3 壳界面(仅启动失败/已停止时显示, 其余阶段空白)
-└── build/                    # Wails 打包资源与产物(build/bin/)
+dsh-desktop (Wails v2 + Go, frontend Vue 3)
+├── main.go                   # Entry: load config, bind App
+├── internal/cfg/             # Data dir / DSH home / log path, fixed port 3080
+├── internal/harness/         # dsh web child-process lifecycle (start/ready/reap/stop)
+├── internal/app/             # Wails-bound APIs for the frontend (Start/Status/Stop/Restart)
+├── cmd/smoke/                # Dev smoke test (spawns real dsh, not a product entry)
+├── frontend/                 # Vue 3 shell UI (splash / failure / stopped states)
+└── build/                    # Wails packaging assets and artifacts (build/bin/)
 ```
 
-### 数据目录
-
-| 项目 | 默认路径 | 覆盖 |
-|---|---|---|
-| 桌面数据根 | `~/.local/share/dsh-desktop` | 环境变量 `DSH_DESKTOP_DATA_DIR`，仅存桌面端日志等数据 |
-| DSH 数据根 | `~/.dsh` | 环境变量 `DSH_HOME`，与系统 DSH 共用 profiles/sessions/plugins/凭据 |
-| 日志 | `<root>/logs/` | 同上 |
-
-### 端口
-
-- Harness 固定监听 `127.0.0.1:3080`。
-- 启动时探测该端口:已有 Harness 服务则直接复用,不重复拉起;否则自动拉起新服务。
-
-### Wails 绑定 API
-
-| 方法 | 说明 |
+| Module | Responsibility |
 |---|---|
-| `Start()` | 异步拉起 harness；前端短暂轮询 `Status()`，就绪后直接跳转 |
-| `Status()` | 当前状态快照(state/url/port/logPath/error) |
-| `Stop()` | 优雅关闭子进程 |
-| `Restart()` | 异步重启子进程，完成后刷新当前 Harness 页面 |
-| `OpenInterface()` | 用系统浏览器打开就绪后的 Harness 界面 |
-| `Platform()` | 当前平台信息 |
+| `internal/cfg` | Resolves data dir, DSH home, log path; fixes port 3080 |
+| `internal/harness` | Spawn / probe / ready / restart / stop the `dsh web` child process; reaps the process tree |
+| `internal/app` | Wails-bound APIs for the frontend: `Start` / `Status` / `Stop` / `Restart` / ... |
+| `frontend` | Splash shell UI (breathing logo), failure retry, stopped-state launch |
 
-### 生命周期与运维
+## Data Directories
 
-- **直达主页 + 就绪跳转**:应用打开后启动页为透明底 favicon 图标(呼吸动画);壳前端每 500ms 检查一次状态，就绪后用 `window.location.href` 直接导航到 Harness。该轮询只存在于启动壳阶段，进入主页后即销毁。窗口主体即为 Harness，无 iframe 嵌套。启动失败或应用被停止时才显示壳的错误/操作界面。
-- **插件后台静默安装**:进入主页后,`dshmarket` 在后台异步安装(不阻塞进入)。桌面端监控 profile 清单，并在安装稳定后读取市场 activation 状态；只有 `restart`/`inert` 插件才弹出原生“稍后 / 立即重启”对话框，热加载成功的插件不会打扰用户。点击重启后桌面端会回收旧进程、重新拉起并自动刷新页面。前置依赖:`pnpm` 可执行与网络;安装沿用 Harness profile 的 pnpm store。
-- **原生重启提示**:桌面端监控 web profile 清单；安装结束后若市场报告插件状态为 `restart`/`inert`，会显示原生“稍后 / 立即重启”对话框。点击后由桌面端回收并重新拉起受管进程，避免依赖跳转后的 Harness 页面仍持有 Wails runtime。
-- **原生构建白名单**:安装前会往 `profiles/web/pnpm-workspace.yaml` 写入 `allowBuilds`,放行常用安全原生依赖 `node-pty / cloudflared / cpu-features / ssh2`——从市场安装用到这些依赖的插件(如 `dsh-plugin-terminal`、`dsh-web-ui-all`)不会因 pnpm 默认拦截而失败。白名单外的包仍按默认拦截,保留供应链安全;可在该文件 `allowBuilds` 里按需增删。
-- **退出即回收**:应用不设菜单栏,退出通过窗口关闭按钮触发,`OnShutdown` 会优雅回收 Harness 子进程树。当前重启入口由插件市场按需显示，尚未提供独立的停止入口；如需要可在后续用托盘补充。
+App data is kept separate from the install directory, following the XDG spec.
 
-## 开发
+| Item | Default path | Override | Contents |
+|---|---|---|---|
+| App data root | `~/.local/share/dsh-desktop` | `DSH_DESKTOP_DATA_DIR` | Desktop-only data (e.g. logs) |
+| DSH data root | `~/.dsh` | `DSH_HOME` | Shared with CLI DSH: profiles / sessions / plugins / credentials |
+| Logs | `<app data root>/logs/` | same as above | harness runtime logs |
 
-环境要求:Go 1.25+、Node.js 20.19+、Wails CLI v2.14。
+> Sharing `DSH_HOME` with the CLI means sessions and plugins you create in the desktop app are still there in the terminal.
 
-### 应用图标(Linux)
+## Port
 
-- **窗口/任务栏图标**:构建时由 `//go:embed build/appicon.png` 注入 `options.App.Linux.Icon`,运行时通过 `gtk_window_set_icon` 设置(favicon 白底黑鲸鱼)。
-- **桌面/启动器图标**:GNOME/KDE 等桌面环境的启动器图标取自 `.desktop` 文件的 `Icon=` 字段,不读运行时的 GTK 图标。安装到系统后使用提供的 `build/dsh-desktop.desktop` 与 `build/dsh-desktop.png`:
+- Fixed `127.0.0.1:3080` (loopback only, never exposed to the network).
+- On startup the port is probed: **an existing Harness service is reused, not duplicated**; otherwise a new one is launched.
+- When reusing an external service, the desktop app neither takes it over nor shuts it down.
+
+## Configuration
+
+Environment variables only — no config files to edit.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DSH_HOME` | `~/.dsh` | Shared data root for DSH CLI and the desktop app |
+| `DSH_DESKTOP_DATA_DIR` | `~/.local/share/dsh-desktop` | Desktop app data root (logs, etc.) |
+| `DSH_DESKTOP_SKIP_PLUGINS` | unset | Set to `1` to disable all automatic plugin preinstall |
+| `DSH_DESKTOP_USAGE_PLUGIN` | unset | Local/remote usage-plugin source (development) |
+
+## FAQ
+
+**Can I use it without installing dsh?** Yes. The app falls back to Node.js + `npx` (first run needs network).
+
+**Port 3080 is taken?** If the occupant is a Harness service, the app reuses it; otherwise stop the other program first.
+
+**Any leftovers after closing?** No. Graceful shutdown with a kill-group fallback.
+
+**Do the desktop app and the CLI share data?** Yes — both use `~/.dsh`.
+
+## Development
+
+Requirements: Go 1.25+, Node.js 20.19+, Wails CLI v2.14.
 
 ```bash
-sudo install -D build/dsh-desktop.png /usr/local/share/icons/dsh-desktop.png
-sudo install -D build/dsh-desktop.desktop /usr/local/share/applications/dsh-desktop.desktop
-sudo install -m755 build/bin/dsh-desktop /usr/local/bin/dsh-desktop
-sudo update-desktop-database /usr/local/share/applications
-```
-
-```bash
-# 安装前端依赖
 cd frontend && npm install && cd ..
-
-# 开发模式(热更新 + 绑定自动生成)
-wails dev
-
-# 接入本地 @dsh-plugins/usage，安装后重启一次并打开「设置 → 用量」
-DSH_DESKTOP_USAGE_PLUGIN=/home/halo/code/dsh-plugins/packages/usage wails dev
-
-# 类型检查 / 单元测试
-go vet ./...
-go test ./internal/harness/...
-
-# 构建桌面端产物(build/bin/dsh-desktop)
-wails build
+wails dev            # dev mode (hot reload + binding generation)
+go vet ./...         # vet
+go test ./internal/harness/...   # unit tests
+wails build          # build desktop artifact (build/bin/dsh-desktop)
 ```
 
-> 说明:绑定生成产物位于 `frontend/wailsjs/go/app/`(命名空间取决于 App 所属包),`wails dev`/`wails build` 会自动生成,无需手工维护。
-
-### 冒烟验证(核心流程端到端)
-
-`cmd/smoke` 直接复用 `cfg` 与 `harness` 包,真实拉起 `dsh web`,确认就绪后优雅关闭,验证进程组回收:
+Smoke test (spawns a real `dsh web`):
 
 ```bash
 DSH_HOME=/tmp/dsh-smoke/home DSH_DESKTOP_DATA_DIR=/tmp/dsh-smoke/data go run ./cmd/smoke
-# 期望输出:
-# 就绪耗时 ..., URL=http://127.0.0.1:3080, 状态=ready
-# 重启完成, 耗时 ..., 状态=ready
-# 已优雅关闭, 最终状态=stopped
 ```
 
-在未配置 GUI 的无头环境应同时把 `DSH_HOME` 和 `DSH_DESKTOP_DATA_DIR` 指向可写目录完成验证，避免修改日常使用的共享 profile。
-
-### 插件市场自动安装验证(需网络 + pnpm)
+Plugin market preinstall test (needs network + pnpm):
 
 ```bash
 go test ./internal/harness/ -tags manual -run TestPreinstallManual -v
 ```
 
-该用例对全新目录真实执行 `EnsurePreinstalled`(依序检测/安装默认插件,即插件市场),断言事件序列产生、`profiles/web/node_modules/dshmarket` 出现、二次调用幂等(不再 `install`)以及 skip 开关行为。默认 `go test ./...` 不带 `manual` tag 会跳过此网络依赖用例。
+## Roadmap
 
-## 已知边界
+- [x] Stage 1: reuse system DSH (incl. `DSH_HOME` data), npx fallback, lifecycle hosting, status UI
+- [ ] Bundled minimal Node runtime + dsh dependencies (fully offline)
+- [ ] Version update detection & upgrade guidance (GitHub Releases)
+- [ ] System tray & multiple windows
 
-- PATH 中没有 `dsh` 时依赖系统 Node.js，npx 首次装配 dsh 依赖需要网络；第二阶段将内置离线运行时消除此限制。
-- 就绪后窗口 WebView 直接承载 Harness(启动壳低频状态检查后跳转,无 iframe),与参考项目的 Electron 原生窗口承载在形态上一致。
-- 窗口跳转 Harness 后壳页面不再可达；插件市场需要重启时可通过其提示按钮触发桌面端受管重启，但尚未提供独立的停止/常驻运维入口。
-- 无头环境无法启动 GUI,故跳转的运行时表现需在带桌面的 Linux 以 `wails dev` 人工验收。
+## License
 
-## 路线图
-
-- [x] 第一阶段:优先复用系统 DSH（含 `DSH_HOME` 数据），npx 兼容回退、生命周期托管、状态界面
-- [ ] 内置精简 Node 运行时与 dsh 依赖(完全离线)
-- [ ] 版本更新检测与升级引导(GitHub Releases)
-- [ ] 系统托盘与多窗口(可选)
+MIT
