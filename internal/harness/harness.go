@@ -117,7 +117,7 @@ func (h *Harness) Start() error {
 	defer logFile.Close()
 
 	cmd, err := newDshCommand("web",
-		"--host", "127.0.0.1", "--port", fmt.Sprintf("%d", h.port))
+		"--no-open", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", h.port))
 	if err != nil {
 		h.fail(fmt.Errorf("未检测到 dsh 命令, 请先安装 Harness: %w", err))
 		return err

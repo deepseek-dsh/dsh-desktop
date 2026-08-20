@@ -105,45 +105,44 @@ func (a *App) Start() StartupStatus {
 
 	a.startupSteps = []StartupStep{
 		{ID: "harness", Title: "检查 Harness", Status: StepPending},
-		{ID: "start", Title: "启动 Harness", Status: StepPending},
 		{ID: "market", Title: "安装插件市场", Status: StepPending},
+		{ID: "start", Title: "启动 Harness", Status: StepPending},
 	}
 	status := a.startupStatus()
 	a.mu.Unlock()
 
 	go func() {
-		// 步骤 1: 检查系统是否已装 harness, 并确定启动方式(dsh/npx)。
-		// 验证成功后才允许进入下一步。
+		// 步骤 1: 检查系统是否已装 harness。未装则不自动安装, 提示用户自行安装。
 		a.setStep("harness", StepRunning, "检测 dsh 命令...")
 		time.Sleep(stepPause)
-		method := harness.LaunchMethod()
-		if method == "npx" {
-			a.setStep("harness", StepRunning, "未检测到 dsh, 将通过 npx 自动安装...")
-			time.Sleep(stepPause)
-			if !harness.NpxAvailable() {
-				a.setStep("harness", StepFailed, "未找到 dsh 且 npx 不可用, 请先安装 Node.js")
-				return
+		if !harness.IsInstalled() {
+			msg := "未检测到 Harness, 请执行 npm install -g @deepseek-ai/dsh 后重试"
+			if !harness.NodeAvailable() {
+				msg = "未检测到 Harness, 且未找到 npm, 请先安装 Node.js 后执行 npm install -g @deepseek-ai/dsh"
 			}
+			a.setStep("harness", StepFailed, msg)
+			return
 		}
-		a.setStep("harness", StepDone, "启动方式: "+method)
+		a.setStep("harness", StepDone, "已检测到 dsh")
 		time.Sleep(stepPause)
 
-		// 步骤 2: 启动 harness, 就绪后才算通过。
-		a.setStep("start", StepRunning, "通过 "+method+" 拉起 dsh web...")
+		// 步骤 2: 安装插件市场。必须在启动 harness 之前完成,
+		// 否则 web profile 引用的插件未装, dsh 加载 profile 会直接退出。
+		a.setStep("market", StepRunning, "检测并安装插件市场...")
+		if !a.installPluginsForStartup(h.DshHome()) {
+			return
+		}
+		a.setStep("market", StepDone, "插件市场就绪")
+		time.Sleep(stepPause)
+
+		// 步骤 3: 启动 harness, 就绪后才算通过。
+		a.setStep("start", StepRunning, "通过 dsh 拉起 web...")
 		if err := h.Start(); err != nil {
 			a.setStep("start", StepFailed, err.Error())
 			return
 		}
 		time.Sleep(stepPause)
 		a.setStep("start", StepDone, "就绪: "+h.URL())
-		time.Sleep(stepPause)
-
-		// 步骤 3: 安装插件市场(同步等待, 失败则停在启动页)。
-		a.setStep("market", StepRunning, "检测并安装插件市场...")
-		if !a.installPluginsForStartup(h.DshHome()) {
-			return
-		}
-		a.setStep("market", StepDone, "插件市场就绪")
 
 		// 插件安装稳定后监控 profile 变化, 需要重启的插件由原生提示接管。
 		a.startPluginMonitor()
