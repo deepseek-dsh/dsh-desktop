@@ -1,24 +1,147 @@
 package harness
 
-import "os/exec"
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
 
-// IsInstalled 检测系统 PATH 中是否已安装 dsh 命令。
+// commonBinDirs 返回桌面启动器常缺 PATH 的 dsh/node 安装目录。
+// 从终端启动 PATH 完整, 但从桌面快捷方式启动时需显式补充。
+// 按平台给出常见安装目录: 除用户级 npm/nvm 目录外, 也纳入系统级、
+// Homebrew 与 Windows 全局安装目录, 覆盖非 nvm 场景下 dsh 落位路径。
+func commonBinDirs() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	patterns := []string{
+		filepath.Join(home, ".cache", "dsh-global", "bin"),
+		filepath.Join(home, ".npm-global", "bin"),
+		filepath.Join(home, ".local", "bin"),
+		filepath.Join(home, ".nvm", "versions", "node", "*", "bin"),
+	}
+	if runtime.GOOS == "windows" {
+		// Windows 全局 npm bin 目录, %APPDATA% 由环境变量注入。
+		patterns = append(patterns, filepath.Join(os.Getenv("APPDATA"), "npm"))
+		patterns = append(patterns, filepath.Join(os.Getenv("ProgramFiles"), "nodejs"))
+		patterns = append(patterns, filepath.Join(os.Getenv("ProgramFiles(x86)"), "nodejs"))
+	} else {
+		patterns = append(patterns,
+			"/usr/local/bin",
+			"/opt/homebrew/bin",
+			"/opt/homebrew/Cellar/node/*/bin",
+			"/usr/local/nvm/versions/node/*/bin",
+		)
+	}
+	var dirs []string
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err == nil {
+			dirs = append(dirs, matches...)
+		}
+	}
+	return dedupe(dirs)
+}
+
+// dedupe 保持顺序去除重复目录, 避免同一安装目录被重复探测。
+func dedupe(dirs []string) []string {
+	seen := make(map[string]bool, len(dirs))
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		out = append(out, dir)
+	}
+	return out
+}
+
+// EnsurePATH 把 dsh/node 的常见安装目录并入进程 PATH, 保证检测与子进程可用。
+func EnsurePATH() {
+	current := os.Getenv("PATH")
+	for _, dir := range commonBinDirs() {
+		if inPath(current, dir) {
+			continue
+		}
+		current = dir + string(os.PathListSeparator) + current
+	}
+	os.Setenv("PATH", current)
+}
+
+// inPath 判断 dir 是否已精确出现在以 PathListSeparator 分隔的 PATH 里。
+// 逐段精确比较, 避免子串误判(如 /usr/local/bin 命中 /usr/local/bin2);
+// Windows 下路径不区分大小写, 故统一小写比较。
+func inPath(pathEnv, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	sep := string(os.PathListSeparator)
+	lowerDir := strings.ToLower(filepath.Clean(dir))
+	for _, part := range strings.Split(pathEnv, sep) {
+		if strings.ToLower(filepath.Clean(part)) == lowerDir {
+			return true
+		}
+	}
+	return false
+}
+
+// lookupInPaths 在 PATH 与常见安装目录中查找可执行文件, 返回完整路径。
+func lookupInPaths(name string) string {
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+	for _, dir := range commonBinDirs() {
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		// Unix 需校验可执行位; Windows 下 os.Stat 不设执行位, 存在即视为可用。
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+			continue
+		}
+		return path
+	}
+	return ""
+}
+
+// dshLauncher 返回调用 dsh 的命令名与参数前缀。
+// 优先使用系统安装的 dsh; 未安装但存在 npm 时回退到 npx 按需拉取,
+// 以保证在未预装 dsh 的干净机器上也能运行(对应 README 的 npx 回退策略)。
+// 两者都不可用返回 "", 由上层提示用户安装 Node.js 与 dsh。
+func dshLauncher() (binary string, args []string) {
+	if path := lookupInPaths("dsh"); path != "" {
+		return path, nil
+	}
+	if npx := lookupInPaths("npx"); npx != "" {
+		return npx, []string{"--yes", "dsh"}
+	}
+	return "", nil
+}
+
+// IsInstalled 检测本机是否具备运行 dsh 的能力(系统 dsh 或可经 npx 拉取)。
 func IsInstalled() bool {
-	_, err := exec.LookPath("dsh")
-	return err == nil
+	bin, _ := dshLauncher()
+	return bin != ""
 }
 
 // NodeAvailable 检测系统是否已安装 npm(Node.js), 用于未装 harness 时给出安装指引。
 func NodeAvailable() bool {
-	_, err := exec.LookPath("npm")
-	return err == nil
+	return lookupInPaths("npm") != ""
 }
 
-// newDshCommand 使用系统安装的 dsh 命令执行; 未安装时返回错误, 由上层提示用户自行安装。
+// newDshCommand 返回执行 dsh 命令的 exec.Cmd。优先系统 dsh, 缺失时经 npx 回退
+// (首次会自动下载), 仍不可用则返回错误, 由上层提示用户自行安装。
 func newDshCommand(args ...string) (*exec.Cmd, error) {
-	dshPath, err := exec.LookPath("dsh")
-	if err != nil {
-		return nil, err
+	bin, prefix := dshLauncher()
+	if bin == "" {
+		return nil, errors.New("dsh 未安装(且未找到 npm/npx, 请先安装 Node.js)")
 	}
-	return exec.Command(dshPath, args...), nil
+	// exec.LookPath 已解析 bin 为绝对路径, 但 npx 场景下需显式带回 prefix。
+	return exec.Command(bin, append(prefix, args...)...), nil
 }

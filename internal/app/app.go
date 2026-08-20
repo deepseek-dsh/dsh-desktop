@@ -114,8 +114,10 @@ func (a *App) Start() StartupStatus {
 
 	go func() {
 		// 步骤 1: 检查系统是否已装 harness。未装则不自动安装, 提示用户自行安装。
+		// 先从桌面/终端合并 dsh/node 的常见安装目录到 PATH, 保证检测与子进程可用。
 		a.setStep("harness", StepRunning, "检测 dsh 命令...")
 		time.Sleep(stepPause)
+		harness.EnsurePATH()
 		if !harness.IsInstalled() {
 			msg := "未检测到 Harness, 请执行 npm install -g @deepseek-ai/dsh 后重试"
 			if !harness.NodeAvailable() {
