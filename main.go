@@ -31,6 +31,8 @@ func main() {
 		Title:  "DSH Desktop",
 		Width:  1200,
 		Height: 800,
+		// 与启动页白色底一致, 避免导航到 Harness 期间出现黑屏/白屏闪烁。
+		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 255},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
