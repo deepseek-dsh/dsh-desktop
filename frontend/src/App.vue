@@ -68,6 +68,7 @@ function applyStatus(s) {
   url.value = s.url || ''
   logPath.value = s.logPath || ''
   errorText.value = s.error || ''
+  theme.value = s.theme || 'light'
   steps.value = s.steps || []
 
   const failedStep = steps.value.find((st) => st.status === 'failed')
@@ -128,10 +129,20 @@ onUnmounted(() => {
 
 const isFailed = () => startupFailed.value || state.value === 'failed'
 const isStopped = () => state.value === 'stopped'
+const theme = ref('light')
+
+// themeClass 返回外观主题 class: harness 偏好 system 时跟随系统深浅。
+const themeClass = () => {
+  if (theme.value === 'dark') return 'theme-dark'
+  if (theme.value === 'system') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'theme-dark' : 'theme-light'
+  }
+  return 'theme-light'
+}
 </script>
 
 <template>
-  <main class="shell">
+  <main class="shell" :class="themeClass()">
     <!-- 启动检查: 左侧品牌呼吸, 右侧分步展示启动进度 -->
     <section v-if="!isFailed() && !isStopped()" class="boot">
       <aside class="brand">
@@ -180,6 +191,7 @@ const isStopped = () => state.value === 'stopped'
   --border: #e4e7ec;
   --ink: #101828;
   --ink-2: #667085;
+  --dot: #d0d5dd;
   --brand: #4d6bfe;
   --ok: #12b76a;
   --warn: #f79009;
@@ -190,6 +202,19 @@ const isStopped = () => state.value === 'stopped'
   height: 100vh;
   display: flex;
   flex-direction: column;
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+}
+.shell.theme-dark {
+  --bg: #0f1720;
+  --surface: #16202c;
+  --border: rgba(255, 255, 255, 0.1);
+  --ink: #eef2f7;
+  --ink-2: #8a94a6;
+  --dot: rgba(255, 255, 255, 0.28);
+  --brand: #5b7cff;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
   background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
 }
 .boot {
@@ -295,7 +320,7 @@ const isStopped = () => state.value === 'stopped'
   height: 12px;
   margin-top: 4px;
   border-radius: 50%;
-  background: #d0d5dd;
+  background: var(--dot);
 }
 .steps li.running .dot {
   background: var(--warn);

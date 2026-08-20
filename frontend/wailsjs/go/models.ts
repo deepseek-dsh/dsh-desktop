@@ -24,6 +24,7 @@ export namespace app {
 	    port: number;
 	    logPath: string;
 	    error?: string;
+	    theme: string;
 	    steps: StartupStep[];
 	
 	    static createFrom(source: any = {}) {
@@ -37,6 +38,7 @@ export namespace app {
 	        this.port = source["port"];
 	        this.logPath = source["logPath"];
 	        this.error = source["error"];
+	        this.theme = source["theme"];
 	        this.steps = this.convertValues(source["steps"], StartupStep);
 	    }
 	

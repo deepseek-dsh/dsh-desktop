@@ -36,6 +36,7 @@ type StartupStep struct {
 // StartupStatus 是对前端暴露的启动状态: 运行时快照 + 启动步骤清单。
 type StartupStatus struct {
 	harness.Status
+	Theme string        `json:"theme"` // harness 外观偏好: dark/system/light
 	Steps []StartupStep `json:"steps"`
 }
 
@@ -164,10 +165,11 @@ func (a *App) Status() StartupStatus {
 	return a.startupStatus()
 }
 
-// startupStatus 汇总 harness 快照与启动步骤, 调用方需持有 mu。
+// startupStatus 汇总 harness 快照、外观主题与启动步骤, 调用方需持有 mu。
 func (a *App) startupStatus() StartupStatus {
 	return StartupStatus{
 		Status: a.harness.CurrentStatus(),
+		Theme:  harness.ThemePreference(a.cfg.DshHome),
 		Steps:  append([]StartupStep(nil), a.startupSteps...),
 	}
 }
