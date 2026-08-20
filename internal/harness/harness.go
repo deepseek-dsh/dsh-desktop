@@ -19,10 +19,6 @@ const ReadyTimeout = 180 * time.Second
 // ShutdownGrace 是优雅关闭后强杀进程组的等待时间。
 const ShutdownGrace = 5 * time.Second
 
-// DshPackage 是系统未安装 dsh 命令时使用的 npm 回退入口。
-// 不固定版本，使它与用户直接执行 npx @deepseek-ai/dsh 复用同一份缓存。
-const DshPackage = "@deepseek-ai/dsh"
-
 // State 描述 harness 子进程当前所处生命周期阶段。
 type State string
 
@@ -120,8 +116,12 @@ func (h *Harness) Start() error {
 	}
 	defer logFile.Close()
 
-	cmd := newDshCommand("web",
+	cmd, err := newDshCommand("web",
 		"--host", "127.0.0.1", "--port", fmt.Sprintf("%d", h.port))
+	if err != nil {
+		h.fail(fmt.Errorf("未检测到 dsh 命令, 请先安装 Harness: %w", err))
+		return err
+	}
 	cmd.Dir = h.dshHome
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

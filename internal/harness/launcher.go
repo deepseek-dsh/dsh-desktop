@@ -1,29 +1,24 @@
 package harness
 
-import (
-	"os/exec"
-)
+import "os/exec"
 
-// LaunchMethod 返回实际会采用的启动方式: 系统已装 dsh 返回 "dsh", 否则返回 "npx"。
-func LaunchMethod() string {
-	if _, err := exec.LookPath("dsh"); err == nil {
-		return "dsh"
-	}
-	return "npx"
-}
-
-// NpxAvailable 检测系统是否可用 npx(Node.js)。
-func NpxAvailable() bool {
-	_, err := exec.LookPath("npx")
+// IsInstalled 检测系统 PATH 中是否已安装 dsh 命令。
+func IsInstalled() bool {
+	_, err := exec.LookPath("dsh")
 	return err == nil
 }
 
-// newDshCommand 优先复用系统 PATH 中安装的 dsh；未安装时才通过 npx
-// 启动兼容版本，使桌面端在干净系统上仍可运行。
-func newDshCommand(args ...string) *exec.Cmd {
-	if dshPath, err := exec.LookPath("dsh"); err == nil {
-		return exec.Command(dshPath, args...)
+// NodeAvailable 检测系统是否已安装 npm(Node.js), 用于未装 harness 时给出安装指引。
+func NodeAvailable() bool {
+	_, err := exec.LookPath("npm")
+	return err == nil
+}
+
+// newDshCommand 使用系统安装的 dsh 命令执行; 未安装时返回错误, 由上层提示用户自行安装。
+func newDshCommand(args ...string) (*exec.Cmd, error) {
+	dshPath, err := exec.LookPath("dsh")
+	if err != nil {
+		return nil, err
 	}
-	fallbackArgs := append([]string{"--yes", DshPackage}, args...)
-	return exec.Command("npx", fallbackArgs...)
+	return exec.Command(dshPath, args...), nil
 }

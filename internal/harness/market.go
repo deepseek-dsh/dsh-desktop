@@ -132,7 +132,10 @@ func EnsurePreinstalled(workDir string, onStage func(stage, name string, ok bool
 
 // installPlugin 通过 dsh CLI 把指定插件装进 web profile。
 func installPlugin(workDir, name, source string) error {
-	cmd := newDshCommand("plugin", "--profile", "web", "add", source)
+	cmd, err := newDshCommand("plugin", "--profile", "web", "add", source)
+	if err != nil {
+		return fmt.Errorf("未检测到 dsh 命令, 请先安装 Harness: %w", err)
+	}
 	cmd.Dir = workDir
 	// 与 Harness 创建 profile 时保持同一 pnpm store。若在这里另设 XDG_DATA_HOME，
 	// pnpm 会因现有 node_modules 来自另一 store 而报 ERR_PNPM_UNEXPECTED_STORE。

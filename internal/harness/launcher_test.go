@@ -14,7 +14,10 @@ func TestNewDshCommandPrefersSystemCommand(t *testing.T) {
 	}
 	t.Setenv("PATH", binDir)
 
-	cmd := newDshCommand("web", "--port", "1234")
+	cmd, err := newDshCommand("web", "--port", "1234")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if cmd.Path != dshPath {
 		t.Fatalf("launcher=%q, want system dsh %q", cmd.Path, dshPath)
 	}
@@ -23,19 +26,27 @@ func TestNewDshCommandPrefersSystemCommand(t *testing.T) {
 	}
 }
 
-func TestNewDshCommandFallsBackToNpx(t *testing.T) {
+func TestNewDshCommandErrorsWhenNotInstalled(t *testing.T) {
 	binDir := t.TempDir()
-	npxPath := filepath.Join(binDir, "npx")
-	if err := os.WriteFile(npxPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	t.Setenv("PATH", binDir)
 
-	cmd := newDshCommand("web")
-	if cmd.Path != npxPath {
-		t.Fatalf("launcher=%q, want npx %q", cmd.Path, npxPath)
+	if _, err := newDshCommand("web"); err == nil {
+		t.Fatal("want error when dsh is not installed")
 	}
-	if len(cmd.Args) != 4 || cmd.Args[1] != "--yes" || cmd.Args[2] != DshPackage || cmd.Args[3] != "web" {
-		t.Fatalf("unexpected fallback args: %#v", cmd.Args)
+}
+
+func TestNodeAvailable(t *testing.T) {
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
+	if NodeAvailable() {
+		t.Fatal("want false when npm is not installed")
+	}
+
+	npmPath := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(npmPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !NodeAvailable() {
+		t.Fatal("want true when npm is installed")
 	}
 }
