@@ -1,5 +1,21 @@
 export namespace app {
 	
+	export class InstallGuide {
+	    nodeMissing: boolean;
+	    command: string;
+	    steps: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new InstallGuide(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.nodeMissing = source["nodeMissing"];
+	        this.command = source["command"];
+	        this.steps = source["steps"];
+	    }
+	}
 	export class StartupStep {
 	    id: string;
 	    title: string;
@@ -26,6 +42,7 @@ export namespace app {
 	    error?: string;
 	    theme: string;
 	    steps: StartupStep[];
+	    guide?: InstallGuide;
 	
 	    static createFrom(source: any = {}) {
 	        return new StartupStatus(source);
@@ -40,6 +57,7 @@ export namespace app {
 	        this.error = source["error"];
 	        this.theme = source["theme"];
 	        this.steps = this.convertValues(source["steps"], StartupStep);
+	        this.guide = this.convertValues(source["guide"], InstallGuide);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

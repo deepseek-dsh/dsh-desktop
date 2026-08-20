@@ -4,6 +4,7 @@ import {
   Start,
   Status,
   Platform,
+  OpenExternal,
 } from '../wailsjs/go/app/App'
 
 const state = ref('idle')
@@ -13,6 +14,8 @@ const errorText = ref('')
 const platform = ref('')
 const steps = ref([])
 const startupFailed = ref(false)
+const guide = ref(null)
+const copied = ref(false)
 
 let pollTimer
 let jumpTimer
@@ -55,6 +58,8 @@ function allStepsDone(list) {
 
 async function start() {
   startupFailed.value = false
+  guide.value = null
+  copied.value = false
   const s = await Start()
   applyStatus(s)
   if (s && shouldContinue(s)) {
@@ -70,6 +75,7 @@ function applyStatus(s) {
   errorText.value = s.error || ''
   theme.value = s.theme || 'light'
   steps.value = s.steps || []
+  guide.value = s.guide || null
 
   const failedStep = steps.value.find((st) => st.status === 'failed')
   if (failedStep) {
@@ -131,6 +137,23 @@ const isFailed = () => startupFailed.value || state.value === 'failed'
 const isStopped = () => state.value === 'stopped'
 const theme = ref('light')
 
+// copyCommand 复制安装命令到剪贴板, 短暂显示"已复制"。
+async function copyCommand() {
+  if (!guide.value) return
+  try {
+    await navigator.clipboard.writeText(guide.value.command)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1500)
+  } catch (err) {
+    // 剪贴板不可用时静默忽略
+  }
+}
+
+// openExternal 用系统默认浏览器打开外部链接。
+function openExternal(url) {
+  OpenExternal(url)
+}
+
 // themeClass 返回外观主题 class: harness 偏好 system 时跟随系统深浅。
 const themeClass = () => {
   if (theme.value === 'dark') return 'theme-dark'
@@ -171,8 +194,20 @@ const themeClass = () => {
     <!-- 启动失败 -->
     <section v-else-if="isFailed()" class="card center">
       <div class="err">⚠</div>
-      <h2>启动失败</h2>
+      <h2>{{ guide ? '未检测到 Harness' : '启动失败' }}</h2>
       <p class="error">{{ errorText }}</p>
+      <template v-if="guide">
+        <ol class="guide-steps">
+          <li v-for="(step, i) in guide.steps" :key="i">{{ step }}</li>
+        </ol>
+        <div class="cmd">
+          <code>{{ guide.command }}</code>
+          <button @click="copyCommand">{{ copied ? '已复制' : '复制' }}</button>
+        </div>
+        <button v-if="guide.nodeMissing" @click="openExternal('https://nodejs.org')">
+          安装 Node.js
+        </button>
+      </template>
       <button class="primary" @click="start">重试</button>
     </section>
 
@@ -379,6 +414,36 @@ h2 { margin: 0; font-size: 20px; font-weight: 600; }
   font-size: 14px;
   word-break: break-word;
   white-space: pre-wrap;
+}
+.guide-steps {
+  margin: 0;
+  padding: 0 0 0 20px;
+  text-align: left;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-2);
+}
+.cmd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.cmd code {
+  font-size: 13px;
+  color: var(--brand);
+  word-break: break-all;
+}
+.cmd button {
+  padding: 4px 12px;
+  font-size: 12px;
 }
 button {
   cursor: pointer;

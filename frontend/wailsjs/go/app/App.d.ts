@@ -3,6 +3,8 @@
 import {harness} from '../models';
 import {app} from '../models';
 
+export function OpenExternal(arg1:string):Promise<void>;
+
 export function OpenInterface():Promise<void>;
 
 export function Platform():Promise<string>;

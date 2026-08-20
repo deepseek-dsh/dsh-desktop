@@ -33,11 +33,19 @@ type StartupStep struct {
 	Detail string     `json:"detail,omitempty"`
 }
 
+// InstallGuide 是未检测到 harness 时返回给前端的安装引导。
+type InstallGuide struct {
+	NodeMissing bool     `json:"nodeMissing"`
+	Command     string   `json:"command"`
+	Steps       []string `json:"steps"`
+}
+
 // StartupStatus 是对前端暴露的启动状态: 运行时快照 + 启动步骤清单。
 type StartupStatus struct {
 	harness.Status
 	Theme string        `json:"theme"` // harness 外观偏好: dark/system/light
 	Steps []StartupStep `json:"steps"`
+	Guide *InstallGuide `json:"guide,omitempty"` // 未检测到 harness 时的安装引导
 }
 
 // stepPause 是步骤之间的最小展示时长, 保证启动页能看到每一步的进度动画。
@@ -55,6 +63,7 @@ type App struct {
 	monitorDone    chan struct{}
 	closeOnce      sync.Once
 	preinstallBusy bool
+	installGuide   *InstallGuide // 未检测到 harness 时的安装引导
 }
 
 // New 创建后端应用实例。
@@ -119,9 +128,11 @@ func (a *App) Start() StartupStatus {
 		time.Sleep(stepPause)
 		harness.EnsurePATH()
 		if !harness.IsInstalled() {
+			nodeMissing := !harness.NodeAvailable()
+			a.setInstallGuide(nodeMissing)
 			msg := "未检测到 Harness, 请执行 npm install -g @deepseek-ai/dsh 后重试"
-			if !harness.NodeAvailable() {
-				msg = "未检测到 Harness, 且未找到 npm, 请先安装 Node.js 后执行 npm install -g @deepseek-ai/dsh"
+			if nodeMissing {
+				msg = "未检测到 Harness, 且未找到 npm, 请先安装 Node.js"
 			}
 			a.setStep("harness", StepFailed, msg)
 			return
@@ -169,11 +180,21 @@ func (a *App) Status() StartupStatus {
 
 // startupStatus 汇总 harness 快照、外观主题与启动步骤, 调用方需持有 mu。
 func (a *App) startupStatus() StartupStatus {
-	return StartupStatus{
+	status := StartupStatus{
 		Status: a.harness.CurrentStatus(),
 		Theme:  harness.ThemePreference(a.cfg.DshHome),
 		Steps:  append([]StartupStep(nil), a.startupSteps...),
 	}
+	if a.installGuide != nil {
+		guide := *a.installGuide
+		status.Guide = &guide
+	}
+	return status
+}
+
+// OpenExternal 用系统默认浏览器打开外部链接(如 Node.js 官网)。
+func (a *App) OpenExternal(url string) {
+	wruntime.BrowserOpenURL(a.ctx, url)
 }
 
 // setStep 更新某个启动步骤的状态与详情。
@@ -186,6 +207,32 @@ func (a *App) setStep(id string, status StepStatus, detail string) {
 			a.startupSteps[i].Detail = detail
 			return
 		}
+	}
+}
+
+// setInstallGuide 构建未检测到 harness 时的安装引导。
+func (a *App) setInstallGuide(nodeMissing bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	command := "npm install -g @deepseek-ai/dsh"
+	if nodeMissing {
+		a.installGuide = &InstallGuide{
+			NodeMissing: true,
+			Command:     command,
+			Steps: []string{
+				"安装 Node.js 运行时(官网: nodejs.org)",
+				"执行: " + command,
+				"完成安装后点击下方重试",
+			},
+		}
+		return
+	}
+	a.installGuide = &InstallGuide{
+		Command: command,
+		Steps: []string{
+			"执行: " + command,
+			"完成安装后点击下方重试",
+		},
 	}
 }
 
