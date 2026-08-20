@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -14,12 +15,40 @@ import (
 	"dsh-desktop/internal/harness"
 )
 
+// StepStatus 描述启动检查单个步骤的状态。
+type StepStatus string
+
+const (
+	StepPending StepStatus = "pending"
+	StepRunning StepStatus = "running"
+	StepDone    StepStatus = "done"
+	StepFailed  StepStatus = "failed"
+)
+
+// StartupStep 是启动页右侧展示的一个启动检查步骤。
+type StartupStep struct {
+	ID     string     `json:"id"`
+	Title  string     `json:"title"`
+	Status StepStatus `json:"status"`
+	Detail string     `json:"detail,omitempty"`
+}
+
+// StartupStatus 是对前端暴露的启动状态: 运行时快照 + 启动步骤清单。
+type StartupStatus struct {
+	harness.Status
+	Steps []StartupStep `json:"steps"`
+}
+
+// stepPause 是步骤之间的最小展示时长, 保证启动页能看到每一步的进度动画。
+const stepPause = 600 * time.Millisecond
+
 // App 是 Wails 暴露给前端唯一的绑定实例。
 type App struct {
 	ctx            context.Context
 	cfg            *cfg.Config
 	harness        *harness.Harness
 	startupErr     string // 目录初始化失败时记录, 供前端展示
+	startupSteps   []StartupStep
 	mu             sync.Mutex
 	monitorOnce    sync.Once
 	monitorDone    chan struct{}
@@ -62,46 +91,132 @@ func (a *App) Shutdown(ctx context.Context) {
 	}
 }
 
-// Start 异步拉起 harness 子进程, 就绪后置 ready; 返回当前状态快照。
-func (a *App) Start() harness.Status {
+// Start 按启动检查步骤推进: 检查 harness -> 启动 harness -> 安装插件市场。
+// 全程异步执行, 前端通过低频 Status 轮询观察各步骤状态。
+func (a *App) Start() StartupStatus {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if len(a.startupErr) != 0 {
-		return harness.Status{State: harness.StateFailed, Error: a.startupErr}
+		return StartupStatus{Status: harness.Status{State: harness.StateFailed, Error: a.startupErr}}
 	}
 	if a.harness == nil {
-		return harness.Status{State: harness.StateFailed, Error: "harness 尚未初始化"}
+		return StartupStatus{Status: harness.Status{State: harness.StateFailed, Error: "harness 尚未初始化"}}
 	}
 	h := a.harness
 
+	a.startupSteps = []StartupStep{
+		{ID: "harness", Title: "检查 Harness", Status: StepPending},
+		{ID: "start", Title: "启动 Harness", Status: StepPending},
+		{ID: "market", Title: "安装插件市场", Status: StepPending},
+	}
+	status := a.startupStatus()
+	a.mu.Unlock()
+
 	go func() {
-		// 异步执行，前端通过低频 Status 轮询观察 ready/failed。
-		// 不从后端事件回调中执行整页导航，避免 Linux WebKit 同步 JS 通道被导航卡住。
+		// 步骤 1: 检查系统是否已装 harness, 并确定启动方式(dsh/npx)。
+		// 验证成功后才允许进入下一步。
+		a.setStep("harness", StepRunning, "检测 dsh 命令...")
+		time.Sleep(stepPause)
+		method := harness.LaunchMethod()
+		if method == "npx" {
+			a.setStep("harness", StepRunning, "未检测到 dsh, 将通过 npx 自动安装...")
+			time.Sleep(stepPause)
+			if !harness.NpxAvailable() {
+				a.setStep("harness", StepFailed, "未找到 dsh 且 npx 不可用, 请先安装 Node.js")
+				return
+			}
+		}
+		a.setStep("harness", StepDone, "启动方式: "+method)
+		time.Sleep(stepPause)
+
+		// 步骤 2: 启动 harness, 就绪后才算通过。
+		a.setStep("start", StepRunning, "通过 "+method+" 拉起 dsh web...")
 		if err := h.Start(); err != nil {
+			a.setStep("start", StepFailed, err.Error())
 			return
 		}
-		a.startPluginMonitor()
+		time.Sleep(stepPause)
+		a.setStep("start", StepDone, "就绪: "+h.URL())
+		time.Sleep(stepPause)
 
-		// 进入主页后在后台静默安装插件市场, 不阻塞、不打扰。
-		// 市场是 bundle 插件, 装好后需刷新/重启 Harness 才在当前会话生效。
-		go a.silentlyEnsurePlugins(h.DshHome())
+		// 步骤 3: 安装插件市场(同步等待, 失败则停在启动页)。
+		a.setStep("market", StepRunning, "检测并安装插件市场...")
+		if !a.installPluginsForStartup(h.DshHome()) {
+			return
+		}
+		a.setStep("market", StepDone, "插件市场就绪")
+
+		// 插件安装稳定后监控 profile 变化, 需要重启的插件由原生提示接管。
+		a.startPluginMonitor()
 	}()
 
-	return h.CurrentStatus()
+	return status
 }
 
-// Status 返回当前运行状态快照, 供前端轮询。
-func (a *App) Status() harness.Status {
+// Status 返回当前启动状态快照, 供前端轮询。
+func (a *App) Status() StartupStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.startupErr) != 0 {
-		return harness.Status{State: harness.StateFailed, Error: a.startupErr}
+		return StartupStatus{Status: harness.Status{State: harness.StateFailed, Error: a.startupErr}}
 	}
 	if a.harness == nil {
-		return harness.Status{State: harness.StateIdle}
+		return StartupStatus{Status: harness.Status{State: harness.StateIdle}}
 	}
-	return a.harness.CurrentStatus()
+	return a.startupStatus()
+}
+
+// startupStatus 汇总 harness 快照与启动步骤, 调用方需持有 mu。
+func (a *App) startupStatus() StartupStatus {
+	return StartupStatus{
+		Status: a.harness.CurrentStatus(),
+		Steps:  append([]StartupStep(nil), a.startupSteps...),
+	}
+}
+
+// setStep 更新某个启动步骤的状态与详情。
+func (a *App) setStep(id string, status StepStatus, detail string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := range a.startupSteps {
+		if a.startupSteps[i].ID == id {
+			a.startupSteps[i].Status = status
+			a.startupSteps[i].Detail = detail
+			return
+		}
+	}
+}
+
+// installPluginsForStartup 同步安装默认插件, 并把进度反映到"安装插件市场"步骤。
+// 返回是否全部成功, 失败时由调用方保持失败态。
+func (a *App) installPluginsForStartup(workDir string) bool {
+	a.mu.Lock()
+	a.preinstallBusy = true
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.preinstallBusy = false
+		a.mu.Unlock()
+	}()
+
+	success := true
+	harness.EnsurePreinstalled(workDir, func(stage, name string, ok bool) {
+		if !ok {
+			success = false
+			a.setStep("market", StepFailed, "插件 "+name+" 安装失败")
+			return
+		}
+		switch stage {
+		case "skip":
+			a.setStep("market", StepRunning, "已跳过插件 "+name)
+		case "detect":
+			a.setStep("market", StepRunning, "检测插件 "+name+" ...")
+		case "install":
+			a.setStep("market", StepRunning, "正在安装插件 "+name+" ...")
+		case "ok":
+			a.setStep("market", StepRunning, "插件 "+name+" 就绪")
+		}
+	})
+	return success
 }
 
 // Stop 停止 harness 子进程。
@@ -156,21 +271,6 @@ func (a *App) OpenInterface() error {
 	}
 	wruntime.BrowserOpenURL(a.ctx, a.harness.URL())
 	return nil
-}
-
-// silentlyEnsurePlugins 在后台静默安装默认插件(插件市场), 不阻塞进入主页。
-// profile 清单变化由 plugin monitor 观察，并在确实需要时显示原生重启提示。
-func (a *App) silentlyEnsurePlugins(workDir string) {
-	a.mu.Lock()
-	a.preinstallBusy = true
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		a.preinstallBusy = false
-		a.mu.Unlock()
-	}()
-
-	harness.EnsurePreinstalled(workDir, nil)
 }
 
 // Platform 返回当前平台信息, 供前端展示。
