@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -44,7 +46,56 @@ func commonBinDirs() []string {
 			dirs = append(dirs, matches...)
 		}
 	}
+	dirs = orderNvmNewestFirst(dirs)
 	return dedupe(dirs)
+}
+
+// orderNvmNewestFirst 把 nvm 版本目录(v{整})按版本降序排到最前,
+// 保证并入 PATH 时新版 node 优先, 避免 dsh 误用旧版 Node 而无法启动。
+// 非 nvm 形态的目录保持原顺序。
+func orderNvmNewestFirst(dirs []string) []string {
+	nvm := make([]string, 0, len(dirs))
+	rest := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		base := filepath.Base(dir)
+		if filepath.Base(filepath.Dir(filepath.Dir(dir))) == "node" && len(base) > 1 && base[0] == 'v' {
+			nvm = append(nvm, dir)
+			continue
+		}
+		rest = append(rest, dir)
+	}
+	sort.Slice(nvm, func(i, j int) bool {
+		return versionGreater(filepath.Base(nvm[i]), filepath.Base(nvm[j]))
+	})
+	return append(nvm, rest...)
+}
+
+// versionGreater 按 主.次.修订 数值比较两个 v 开头的版本, 返回 a>b。
+func versionGreater(a, b string) bool {
+	pa := splitVersion(a)
+	pb := splitVersion(b)
+	for i := 0; i < 3; i++ {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return false
+}
+
+// splitVersion 把 v24.15.0 解析为 [24,15,0]。
+func splitVersion(v string) [3]int {
+	var out [3]int
+	rest := strings.TrimPrefix(v, "v")
+	for i := 0; i < 3; i++ {
+		num := rest
+		if j := strings.IndexByte(rest, '.'); j >= 0 {
+			num = rest[:j]
+			rest = rest[j+1:]
+		}
+		n, _ := strconv.Atoi(num)
+		out[i] = n
+	}
+	return out
 }
 
 // dedupe 保持顺序去除重复目录, 避免同一安装目录被重复探测。
@@ -62,13 +113,15 @@ func dedupe(dirs []string) []string {
 }
 
 // EnsurePATH 把 dsh/node 的常见安装目录并入进程 PATH, 保证检测与子进程可用。
+// 新目录追加到末尾而不覆盖已存在的目录, 避免把旧版 nvm 的 node 误排到新版之前,
+// 否则 dsh 会用错 Node 版本而无法启动。
 func EnsurePATH() {
 	current := os.Getenv("PATH")
 	for _, dir := range commonBinDirs() {
 		if inPath(current, dir) {
 			continue
 		}
-		current = dir + string(os.PathListSeparator) + current
+		current = current + string(os.PathListSeparator) + dir
 	}
 	os.Setenv("PATH", current)
 }
@@ -128,6 +181,20 @@ func dshLauncher() (binary string, args []string) {
 func IsInstalled() bool {
 	bin, _ := dshLauncher()
 	return bin != ""
+}
+
+// LaunchMode 返回用于运行 dsh 的方式: "dsh" 表示系统已安装, "npx" 表示经
+// npx 按需拉取, 空串表示不可用。供启动页在文案上区分真实安装与 npx 拉起。
+func LaunchMode() string {
+	bin, prefix := dshLauncher()
+	switch {
+	case bin == "":
+		return ""
+	case len(prefix) > 0:
+		return "npx"
+	default:
+		return "dsh"
+	}
 }
 
 // NodeAvailable 检测系统是否已安装 npm(Node.js), 用于未装 harness 时给出安装指引。

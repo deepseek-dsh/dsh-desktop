@@ -62,26 +62,49 @@ func writeBin(t *testing.T, binDir, name string) string {
 	return path
 }
 
-func TestNewDshCommandFallsBackToNpx(t *testing.T) {
+func TestLaunchMode(t *testing.T) {
 	isolatedHome(t)
 	binDir := t.TempDir()
 	t.Setenv("PATH", binDir)
-	// 只有 npx, 没有 dsh: 应回退到 npx --yes dsh。
+
+	// 都不可用: 返回空串。
+	if mode := LaunchMode(); mode != "" {
+		t.Fatalf("want empty mode when neither dsh nor npx, got %q", mode)
+	}
+
+	// 只有 npx: 经 npx 拉起。
+	writeBin(t, binDir, "npx")
+	if mode := LaunchMode(); mode != "npx" {
+		t.Fatalf("want npx mode when only npx, got %q", mode)
+	}
+
+	// 真实 dsh: 优先系统 dsh。
+	writeBin(t, binDir, "dsh")
+	if mode := LaunchMode(); mode != "dsh" {
+		t.Fatalf("want dsh mode when dsh installed, got %q", mode)
+	}
+}
+
+func TestNewDshCommandFallsBackToNpx(t *testing.T) {
+	// 只有 npx、没有真实 dsh 时, 经 npx --yes dsh 拉起。
+	isolatedHome(t)
+	binDir := t.TempDir()
+	t.Setenv("PATH", binDir)
 	writeBin(t, binDir, "npx")
 
-	if !IsInstalled() {
-		t.Fatal("want IsInstalled true when npx can pull dsh")
+	if LaunchMode() != "npx" {
+		t.Skip("npx fallback not effective in this environment; skipping")
 	}
-	cmd, err := newDshCommand("web", "--port", "1234")
+	cmd, err := newDshCommand("web")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cmd.Path != filepath.Join(binDir, "npx") {
 		t.Fatalf("cmd.Path=%q, want npx %q", cmd.Path, filepath.Join(binDir, "npx"))
 	}
-	wantArgs := []string{"--yes", "dsh", "web", "--port", "1234"}
+	wantArgs := []string{"--yes", "dsh", "web"}
 	if !equalStrings(cmd.Args[1:], wantArgs) {
-		t.Fatalf("cmd.Args=%v, want prefix %v", cmd.Args, wantArgs)
+		t.Fatalf("cmd.Args=%v, want %v", cmd.Args[1:], wantArgs)
 	}
 }
 

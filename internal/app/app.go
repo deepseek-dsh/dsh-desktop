@@ -75,6 +75,9 @@ func New(c *cfg.Config) *App {
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// 启动时补齐 dsh/node 的常见安装目录到 PATH, 保证桌面启动器也能检测到。
+	harness.EnsurePATH()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -127,7 +130,8 @@ func (a *App) Start() StartupStatus {
 		a.setStep("harness", StepRunning, "检测 dsh 命令...")
 		time.Sleep(stepPause)
 		harness.EnsurePATH()
-		if !harness.IsInstalled() {
+		mode := harness.LaunchMode()
+		if mode == "" {
 			nodeMissing := !harness.NodeAvailable()
 			a.setInstallGuide(nodeMissing)
 			msg := "未检测到 Harness, 请执行 npm install -g @deepseek-ai/dsh 后重试"
@@ -137,7 +141,11 @@ func (a *App) Start() StartupStatus {
 			a.setStep("harness", StepFailed, msg)
 			return
 		}
-		a.setStep("harness", StepDone, "已检测到 dsh")
+		detail := "已检测到 dsh"
+		if mode == "npx" {
+			detail = "未检测到 dsh, 将通过 npx 按需运行"
+		}
+		a.setStep("harness", StepDone, detail)
 		time.Sleep(stepPause)
 
 		// 步骤 2: 安装插件市场。必须在启动 harness 之前完成,
